@@ -136,5 +136,27 @@ void IncidentPanel::setChain(const anre::AttackChain& chain) {
 
     anre::NarrativeGenerator generator;
     summaryLabel_->setText(qstr(generator.generateSummary(chain)));
-    contentLayout_->addWidget(summaryLabel_, 1);
+    contentLayout_->addWidget(summaryLabel_);
+
+    // "What stood out" — the specific, plain-language things worth checking.
+    auto* findingsTitle = new QLabel("WHAT STOOD OUT");
+    findingsTitle->setObjectName("metricLabel");
+    contentLayout_->addWidget(findingsTitle);
+
+    if (chain.findings.empty()) {
+        auto* clean = new QLabel("Nothing — no suspicious process chains or connections were found.");
+        clean->setObjectName("phaseLine");
+        clean->setWordWrap(true);
+        contentLayout_->addWidget(clean);
+    } else {
+        for (const std::string& finding : chain.findings) {
+            auto* row = new QLabel(QString("•  %1").arg(qstr(finding)));
+            row->setObjectName("phaseLine");
+            row->setWordWrap(true);
+            row->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            contentLayout_->addWidget(row);
+        }
+    }
+
+    contentLayout_->addStretch(1);
 }

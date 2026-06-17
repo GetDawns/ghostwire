@@ -23,6 +23,9 @@ struct AttackChain {
     int riskScore = 0;
     std::string threatLevel;
     std::vector<std::string> timeline;
+    // Plain-language things worth a human's attention. Empty means nothing in
+    // this snapshot matched a known-bad pattern (i.e. it looks clean).
+    std::vector<std::string> findings;
 };
 
 } // namespace anre

@@ -18,7 +18,9 @@ add_library(anre_core STATIC ${ANRE_CORE_SOURCES})
 target_include_directories(anre_core PUBLIC include)
 
 if(WIN32)
-    target_link_libraries(anre_core PUBLIC wevtapi)
+    # wevtapi: Windows Event Log (Sysmon). iphlpapi: TCP connection table.
+    # ws2_32: winsock types used by the connection table.
+    target_link_libraries(anre_core PUBLIC wevtapi iphlpapi ws2_32)
 endif()
 
 if(MSVC)

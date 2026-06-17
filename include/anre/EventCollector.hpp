@@ -8,6 +8,11 @@ namespace anre {
 
 class EventCollector {
 public:
+    // Snapshot this machine right now: every running process (with its parent)
+    // plus active outbound network connections. Works without Sysmon and
+    // without administrator rights. This is the "scan my own computer" path.
+    std::vector<SecurityEvent> scanLiveSystem();
+
     std::vector<SecurityEvent> collectFromSysmon(int maxEvents = 500);
     std::vector<SecurityEvent> loadDemoScenario();
     std::vector<SecurityEvent> loadFromFile(const std::string& path);

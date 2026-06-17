@@ -1,4 +1,5 @@
 #include "anre/NarrativeGenerator.hpp"
+#include "anre/ThreatScoringEngine.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -57,10 +58,10 @@ std::string NarrativeGenerator::describeProcessSpawn(
     if (contains(parent, "powershell") && contains(child, "malware")) {
         return "PowerShell executed downloaded malware";
     }
-    if (contains(parent, "powershell") && contains(child, ".exe")) {
-        return "PowerShell launched a suspicious executable";
-    }
-    return parent + " launched " + child;
+    // No recognised pattern. Return empty so the narrative stays focused on
+    // genuinely interesting spawns — otherwise a live scan of a healthy PC
+    // would list hundreds of normal "services.exe launched svchost.exe" lines.
+    return {};
 }
 
 std::vector<NarrativeSection> NarrativeGenerator::generate(
@@ -95,9 +96,13 @@ std::vector<NarrativeSection> NarrativeGenerator::generate(
                 addLine(MitrePhase::InitialAccess, "A malicious PDF was opened");
             }
             if (!event.parentProcessName.empty()) {
-                addLine(
-                    event.phase == MitrePhase::Unknown ? MitrePhase::Execution : event.phase,
-                    describeProcessSpawn(event.parentProcessName, event.processName));
+                const std::string description =
+                    describeProcessSpawn(event.parentProcessName, event.processName);
+                if (!description.empty()) {
+                    addLine(
+                        event.phase == MitrePhase::Unknown ? MitrePhase::Execution : event.phase,
+                        description);
+                }
             }
             break;
         case EventCategory::FileCreate:
@@ -112,9 +117,14 @@ std::vector<NarrativeSection> NarrativeGenerator::generate(
             addLine(MitrePhase::Persistence, "Malware made a startup registry key for persistence");
             break;
         case EventCategory::NetworkConnection:
-            addLine(
-                MitrePhase::CommandAndControl,
-                event.processName + " connected to external host " + event.target);
+            // Only call out connections from processes that have no business
+            // reaching the internet. Normal apps (browsers, etc.) talk to
+            // hundreds of hosts — listing them all isn't a narrative.
+            if (ThreatScoringEngine::isSuspiciousProcess(event.processName)) {
+                addLine(
+                    MitrePhase::CommandAndControl,
+                    event.processName + " connected to external host " + event.target);
+            }
             break;
         case EventCategory::LogonFailure:
             addLine(MitrePhase::InitialAccess, "Repeated failed login attempts detected");
@@ -147,8 +157,16 @@ std::vector<NarrativeSection> NarrativeGenerator::generate(
 }
 
 std::string NarrativeGenerator::generateSummary(const AttackChain& chain) {
+    // Nothing matched a known-bad pattern — say so plainly instead of inventing
+    // an attack. This is the normal result of scanning a healthy machine.
+    if (chain.findings.empty() && chain.riskScore < 35) {
+        return "Nothing in this snapshot matches a known attack pattern. The "
+               "processes and connections here look normal. (This is a quick "
+               "heuristic check, not a full antivirus scan.)";
+    }
+
     std::ostringstream summary;
-    summary << "The attack likely started";
+    summary << "The activity likely started";
 
     // Lower-case only the first character so acronyms like "PDF" survive
     // ("A malicious PDF was opened" -> "a malicious PDF was opened").

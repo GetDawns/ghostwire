@@ -2,12 +2,19 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>   // must precede windows.h so we get winsock2, not winsock 1.1
 #include <windows.h>
 #include <winevt.h>
+#include <tlhelp32.h>   // CreateToolhelp32Snapshot — running process list
+#include <iphlpapi.h>   // GetExtendedTcpTable — connection-to-process mapping
 #endif
 
 namespace {
@@ -291,6 +298,187 @@ SecurityEvent parseSysmonXml(std::int64_t id, const std::string& xml) {
 
 } // namespace
 #endif
+
+#ifdef _WIN32
+namespace {
+
+std::string fileTimeToLocalClock(const FILETIME& ft) {
+    SYSTEMTIME utc;
+    SYSTEMTIME local;
+    if (!FileTimeToSystemTime(&ft, &utc) ||
+        !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) {
+        return {};
+    }
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d",
+                  local.wHour, local.wMinute, local.wSecond);
+    return buffer;
+}
+
+std::string queryImagePath(DWORD pid) {
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (handle == nullptr) {
+        return {}; // protected/system process — fall back to the bare name
+    }
+
+    char path[MAX_PATH];
+    DWORD size = MAX_PATH;
+    std::string result;
+    if (QueryFullProcessImageNameA(handle, 0, path, &size)) {
+        result.assign(path, size);
+    }
+    CloseHandle(handle);
+    return result;
+}
+
+std::string queryStartTime(DWORD pid) {
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (handle == nullptr) {
+        return {};
+    }
+
+    FILETIME creation;
+    FILETIME exitTime;
+    FILETIME kernelTime;
+    FILETIME userTime;
+    std::string result;
+    if (GetProcessTimes(handle, &creation, &exitTime, &kernelTime, &userTime)) {
+        result = fileTimeToLocalClock(creation);
+    }
+    CloseHandle(handle);
+    return result;
+}
+
+std::string formatIpv4(DWORD networkOrderAddr) {
+    const auto* bytes = reinterpret_cast<const unsigned char*>(&networkOrderAddr);
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "%u.%u.%u.%u",
+                  bytes[0], bytes[1], bytes[2], bytes[3]);
+    return buffer;
+}
+
+int portFromNetworkOrder(DWORD port) {
+    return static_cast<int>(((port & 0xFF) << 8) | ((port >> 8) & 0xFF));
+}
+
+bool isPrivateOrLocal(DWORD networkOrderAddr) {
+    const auto* b = reinterpret_cast<const unsigned char*>(&networkOrderAddr);
+    const unsigned first = b[0];
+    const unsigned second = b[1];
+    if (first == 0 || first == 127) return true;                 // unspecified / loopback
+    if (first == 10) return true;                                // 10.0.0.0/8
+    if (first == 192 && second == 168) return true;              // 192.168.0.0/16
+    if (first == 172 && second >= 16 && second <= 31) return true; // 172.16.0.0/12
+    if (first == 169 && second == 254) return true;              // link-local
+    return false;
+}
+
+} // namespace
+#endif
+
+std::vector<SecurityEvent> EventCollector::scanLiveSystem() {
+#ifdef _WIN32
+    std::vector<SecurityEvent> events;
+
+    // ---- 1) every running process and its parent ----
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return {};
+    }
+
+    std::unordered_map<DWORD, std::string> pidToName;
+    std::vector<PROCESSENTRY32> rows;
+
+    PROCESSENTRY32 entry;
+    entry.dwSize = sizeof(entry);
+    if (Process32First(snapshot, &entry)) {
+        do {
+            pidToName[entry.th32ProcessID] = entry.szExeFile;
+            rows.push_back(entry);
+        } while (Process32Next(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+
+    std::int64_t id = 1;
+    for (const PROCESSENTRY32& row : rows) {
+        const DWORD pid = row.th32ProcessID;
+        if (pid == 0) {
+            continue; // System Idle Process
+        }
+
+        std::string path = queryImagePath(pid);
+        if (path.empty()) {
+            path = row.szExeFile;
+        }
+        std::string timestamp = queryStartTime(pid);
+        if (timestamp.empty()) {
+            timestamp = "--:--:--";
+        }
+
+        const auto parentIt = pidToName.find(row.th32ParentProcessID);
+        const std::string parentName =
+            parentIt == pidToName.end() ? std::string{} : parentIt->second;
+
+        events.push_back(makeEvent(
+            id++,
+            row.szExeFile,
+            static_cast<std::int32_t>(pid),
+            static_cast<std::int32_t>(row.th32ParentProcessID),
+            parentName,
+            "ProcessCreate",
+            path,
+            timestamp));
+    }
+
+    // ---- 2) active outbound TCP connections, mapped to their process ----
+    DWORD tableSize = 0;
+    GetExtendedTcpTable(nullptr, &tableSize, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+
+    std::vector<unsigned char> buffer(tableSize);
+    if (tableSize > 0 &&
+        GetExtendedTcpTable(buffer.data(), &tableSize, FALSE, AF_INET,
+                            TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+        const auto* table = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buffer.data());
+        std::unordered_set<std::string> seen;
+
+        for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+            const MIB_TCPROW_OWNER_PID& conn = table->table[i];
+            if (conn.dwState != MIB_TCP_STATE_ESTAB) {
+                continue; // only live connections
+            }
+            if (isPrivateOrLocal(conn.dwRemoteAddr)) {
+                continue; // ignore loopback and LAN chatter — we care about the internet
+            }
+
+            const auto nameIt = pidToName.find(conn.dwOwningPid);
+            const std::string name = nameIt == pidToName.end()
+                ? "pid " + std::to_string(conn.dwOwningPid)
+                : nameIt->second;
+            const std::string target = formatIpv4(conn.dwRemoteAddr) + ":" +
+                std::to_string(portFromNetworkOrder(conn.dwRemotePort));
+
+            // Collapse repeated connections from the same process to the same host.
+            if (!seen.insert(name + "->" + target).second) {
+                continue;
+            }
+
+            events.push_back(makeEvent(
+                id++,
+                name,
+                static_cast<std::int32_t>(conn.dwOwningPid),
+                0,
+                std::string{},
+                "NetworkConnect",
+                target,
+                "--:--:--"));
+        }
+    }
+
+    return events;
+#else
+    return {};
+#endif
+}
 
 std::vector<SecurityEvent> EventCollector::collectFromSysmon(int maxEvents) {
 #ifdef _WIN32

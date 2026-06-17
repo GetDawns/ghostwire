@@ -63,6 +63,7 @@ AttackChain AttackChainBuilder::build(
     chain.riskScore = scorer.scoreChain(events);
     chain.threatLevel = scorer.threatLevel(chain.riskScore);
     chain.timeline = buildTimeline(events);
+    chain.findings = scorer.findThreats(events);
     return chain;
 }
 

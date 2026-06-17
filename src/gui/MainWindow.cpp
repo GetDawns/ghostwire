@@ -30,7 +30,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     applyStyle();
     buildLayout();
-    setStatus("Ready — select a data source to begin analysis");
+    setStatus("Ready — click \"Scan This Computer\" to check this machine");
 }
 
 void MainWindow::applyStyle() {
@@ -70,16 +70,21 @@ void MainWindow::buildLayout() {
     sidebarLayout->addWidget(sourceHeader);
     sidebarLayout->addSpacing(4);
 
-    auto* sysmonBtn = new QPushButton("Collect from Sysmon");
-    sysmonBtn->setObjectName("primaryBtn");
-    sysmonBtn->setCursor(Qt::PointingHandCursor);
+    auto* scanBtn = new QPushButton("Scan This Computer");
+    scanBtn->setObjectName("primaryBtn");
+    scanBtn->setCursor(Qt::PointingHandCursor);
 
     auto* csvBtn = new QPushButton("Import CSV file");
     csvBtn->setObjectName("sourceBtn");
     csvBtn->setCursor(Qt::PointingHandCursor);
 
-    sidebarLayout->addWidget(sysmonBtn);
+    auto* demoBtn = new QPushButton("Load example attack");
+    demoBtn->setObjectName("sourceBtn");
+    demoBtn->setCursor(Qt::PointingHandCursor);
+
+    sidebarLayout->addWidget(scanBtn);
     sidebarLayout->addWidget(csvBtn);
+    sidebarLayout->addWidget(demoBtn);
     sidebarLayout->addSpacing(20);
 
     auto* incidentHeader = new QLabel("INCIDENTS");
@@ -163,8 +168,9 @@ void MainWindow::buildLayout() {
 
     mainLayout->addWidget(status);
 
-    connect(sysmonBtn, &QPushButton::clicked, this, &MainWindow::onCollectSysmon);
+    connect(scanBtn, &QPushButton::clicked, this, &MainWindow::onScanSystem);
     connect(csvBtn, &QPushButton::clicked, this, &MainWindow::onImportCsv);
+    connect(demoBtn, &QPushButton::clicked, this, &MainWindow::onLoadDemo);
     connect(refreshBtn_, &QPushButton::clicked, this, &MainWindow::onRefresh);
 }
 
@@ -286,23 +292,28 @@ void MainWindow::addIncidentEntry(const anre::AttackChain& chain) {
     });
 }
 
-void MainWindow::onCollectSysmon() {
-    setStatus("Collecting Sysmon events…");
+void MainWindow::onScanSystem() {
+    setStatus("Scanning this computer…");
 
     anre::EventCollector collector;
-    const auto events = collector.collectFromSysmon(300);
+    const auto events = collector.scanLiveSystem();
 
     if (events.empty()) {
         QMessageBox::information(
             this,
-            "Sysmon unavailable",
-            "Could not read Sysmon events.\n\n"
-            "Ensure Sysmon is installed and run Ghostwire as Administrator.");
-        setStatus("Sysmon collection failed");
+            "Scan unavailable",
+            "Could not read the running process list on this system.\n\n"
+            "Try the example attack to see how Ghostwire works.");
+        setStatus("Scan failed");
         return;
     }
 
-    loadEvents(events, "Sysmon");
+    loadEvents(events, "This computer");
+}
+
+void MainWindow::onLoadDemo() {
+    anre::EventCollector collector;
+    loadEvents(collector.loadDemoScenario(), "Example attack");
 }
 
 void MainWindow::onImportCsv() {
@@ -338,8 +349,12 @@ void MainWindow::onRefresh() {
         return;
     }
 
-    if (currentSource_.startsWith("Sysmon", Qt::CaseInsensitive)) {
-        onCollectSysmon();
+    if (currentSource_ == "This computer") {
+        onScanSystem();
+        return;
+    }
+    if (currentSource_ == "Example attack") {
+        onLoadDemo();
         return;
     }
 

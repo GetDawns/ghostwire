@@ -23,8 +23,9 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
 private slots:
-    void onCollectSysmon();
+    void onScanSystem();
     void onImportCsv();
+    void onLoadDemo();
     void onRefresh();
 
 private:

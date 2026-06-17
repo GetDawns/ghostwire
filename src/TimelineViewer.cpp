@@ -52,11 +52,21 @@ void TimelineViewer::printChain(const AttackChain& chain) {
 
     printTimeline(chain);
 
+    std::cout << "\nWhat stood out\n";
+    std::cout << "-------------\n";
+    if (chain.findings.empty()) {
+        std::cout << "  Nothing — no suspicious process chains or connections found.\n";
+    } else {
+        for (const std::string& finding : chain.findings) {
+            std::cout << "  ! " << finding << '\n';
+        }
+    }
+
     std::cout << "\nRisk Score: " << chain.riskScore << "/100\n";
     std::cout << "Threat Level: " << chain.threatLevel << '\n';
 
     NarrativeGenerator generator;
-    std::cout << "\nExplain Incident #" << chain.id << "\n";
+    std::cout << "\nSummary\n";
     std::cout << generator.generateSummary(chain) << '\n';
 }
 

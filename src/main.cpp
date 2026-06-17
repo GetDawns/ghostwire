@@ -12,7 +12,9 @@ namespace {
 void printUsage() {
     std::cout << "Ghostwire ANRE - Attack Narrative Reconstruction Engine\n\n";
     std::cout << "Usage:\n";
-    std::cout << "  anre demo                 Run the malicious PDF demo scenario\n";
+    std::cout << "  anre                      Scan this computer (default — no setup needed)\n";
+    std::cout << "  anre scan                 Same as above: check running processes + connections\n";
+    std::cout << "  anre demo                 Run the built-in malicious-PDF example\n";
     std::cout << "  anre sysmon [maxEvents]   Collect live Sysmon events (requires admin + Sysmon)\n";
     std::cout << "  anre import <csvFile>     Build a chain from a CSV event file\n";
     std::cout << "  anre help                 Show this help message\n";
@@ -23,12 +25,9 @@ void printUsage() {
 int main(int argc, char* argv[]) {
     using namespace anre;
 
-    if (argc < 2) {
-        printUsage();
-        return 1;
-    }
-
-    const std::string mode = argv[1];
+    // No argument → scan this computer. That's what most people want when they
+    // just run the tool: "is anything wrong with my machine right now?"
+    const std::string mode = (argc >= 2) ? argv[1] : "scan";
     if (mode == "help" || mode == "--help" || mode == "-h") {
         printUsage();
         return 0;
@@ -40,7 +39,17 @@ int main(int argc, char* argv[]) {
 
     std::vector<SecurityEvent> events;
 
-    if (mode == "demo") {
+    if (mode == "scan") {
+        std::cout << "Scanning this computer — running processes and active connections...\n";
+        events = collector.scanLiveSystem();
+        if (events.empty()) {
+            std::cout << "Could not read the process list on this system.\n";
+            std::cout << "Showing the built-in example instead...\n\n";
+            events = collector.loadDemoScenario();
+        } else {
+            std::cout << "Scanned " << events.size() << " processes and connections.\n";
+        }
+    } else if (mode == "demo") {
         events = collector.loadDemoScenario();
         std::cout << "Loaded demo scenario with " << events.size() << " events.\n";
     } else if (mode == "sysmon") {

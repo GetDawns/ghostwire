@@ -1,85 +1,135 @@
 # Ghostwire — Attack Narrative Reconstruction Engine (ANRE)
 
-Ghostwire turns noisy security telemetry into a human-readable attack story. Instead of dumping raw Sysmon alerts, it reconstructs process chains, maps them to MITRE phases, scores risk, and explains what likely happened.
+Ghostwire is a self-service security check for your own Windows PC. Click one
+button (or run one command) and it looks at everything running on your machine —
+every process, who started it, and what it's talking to on the internet — then
+tells you in plain English whether anything looks wrong.
+
+Think of it as the "is something sketchy happening on my computer?" check you'd
+normally need an IT person for. No agent to install, no Sysmon, no administrator
+rights required.
 
 ## What it does
 
-Given events like:
+When you scan, Ghostwire:
 
-- PDF opened
-- `cmd.exe` spawned
-- PowerShell downloaded malware
-- Registry persistence added
-- External network connection
+1. Lists every running process and its parent (via the Windows process snapshot API).
+2. Maps each active outbound connection to the process that opened it.
+3. Builds the parent → child process tree.
+4. Flags known-bad patterns — e.g. a Word document or PDF reader launching
+   PowerShell, a program running from a temp folder, or a suspicious process
+   phoning home.
+5. Gives you a risk score, a threat level, and a short list of **what stood out**.
 
-Ghostwire produces:
+On a healthy machine you get the boring (good) answer:
 
 ```text
-Attack Chain #42
+What stood out
+-------------
+  Nothing — no suspicious process chains or connections found.
 
+Risk Score: 10/100
+Threat Level: Low
+
+Summary
+Nothing in this snapshot matches a known attack pattern. The processes and
+connections here look normal. (This is a quick heuristic check, not a full
+antivirus scan.)
+```
+
+If something *does* match a known attack pattern (try `anre demo` to see it),
+you get the story instead:
+
+```text
 Initial Access:
-  - User opened a malicious PDF document
-
+  - A malicious PDF was opened
 Execution:
   - PDF reader launched cmd.exe
   - cmd.exe launched PowerShell
   - PowerShell downloaded malware.exe
-
 Persistence:
-  - Malware created a startup registry key
-
+  - Malware made a startup registry key for persistence
 Command & Control:
-  - malware.exe connected to 203.0.113.44:443
+  - malware.exe connected to external host 203.0.113.44:443
 
-Risk Score: 92/100
-Threat Level: High
+What stood out
+-------------
+  ! Acrobat.exe launched cmd.exe — apps like this rarely start command-line
+    tools; it's a common malware pattern.
+  ! malware.exe added a startup entry (HKCU\...\Run\Updater) — this makes a
+    program run automatically every time you log in.
+  ! malware.exe connected out to 203.0.113.44:443 — confirm you expect this
+    program to talk to the internet.
+
+Risk Score: 100/100
+Threat Level: Critical
 ```
+
+> Ghostwire is a lightweight heuristic triage tool, not antivirus. It's good at
+> spotting suspicious *relationships* (who launched what, who's talking to the
+> internet). It won't catch everything, and a "Low" score is not a guarantee a
+> machine is clean.
+
+## Where the data comes from
+
+| Source | How to use it |
+|--------|---------------|
+| **This computer** (default) | Live snapshot of running processes + connections. No setup. |
+| **Example attack** | Built-in malicious-PDF scenario, so you can see what a detection looks like. |
+| **CSV import** | Load an event export from another machine or tool. |
+| **Sysmon** | Pull richer history from the Windows Event Log (needs Sysmon + admin). |
 
 ## Architecture
 
 | Module | Role |
 |--------|------|
-| `EventCollector` | Reads Sysmon / Windows Event Logs, demo data, or CSV imports |
-| `RelationshipEngine` | Builds parent-child process graph from events |
-| `NarrativeGenerator` | Converts technical events into analyst-style explanations |
-| `ThreatScoringEngine` | Assigns risk points and threat level |
+| `EventCollector` | Scans the live system, or reads demo data / CSV / Sysmon |
+| `RelationshipEngine` | Builds the parent-child process tree (one node per process) |
+| `ThreatScoringEngine` | Scores risk and produces the plain-language findings |
+| `NarrativeGenerator` | Turns suspicious events into an analyst-style story |
 | `AttackChainBuilder` | Orchestrates the full reconstruction pipeline |
-| `TimelineViewer` | Console output for CLI mode |
+| `TimelineViewer` | Console output for the CLI |
 | `EventDatabase` | Persists events and chains to `data/` |
-| `ghostwire` (GUI) | Qt desktop console for incident review |
+| `ghostwire` (GUI) | Qt desktop app for reviewing a scan |
 
 ## Requirements
 
 - Windows 10/11
-- Visual Studio 2022 with C++ desktop workload
-- **Qt 6 Widgets** (for the GUI) — install via [Qt Online Installer](https://www.qt.io/download-qt-installer) or `aqtinstall`
-- Sysmon (optional, for live collection)
+- Visual Studio 2022 with the C++ desktop workload (for building)
+- **Qt 6 Widgets** — only needed for the GUI; the CLI builds without it
 
 ## Build
 
-### 1. Install Qt 6
+### 1. (Optional) Install Qt 6
 
-Install Qt 6.x with the **MSVC 2022 64-bit** kit. Note the install path, e.g. `C:\Qt\6.8.0\msvc2022_64`.
+Only needed for the desktop GUI. Install Qt 6.x with the **MSVC 2022 64-bit**
+kit and note the path, e.g. `C:\Qt\6.11.1\msvc2022_64`.
 
-### 2. Configure with CMake
+### 2. Get the code and configure with CMake
 
 ```powershell
-cd C:\Users\bayro\source\repos\ghostwire
+git clone https://github.com/GetDawns/ghostwire.git
+cd ghostwire
 
-cmake -B build -G "Visual Studio 17 2022" -DCMAKE_PREFIX_PATH="C:\Qt\6.8.0\msvc2022_64"
+# Point CMAKE_PREFIX_PATH at YOUR Qt install — replace the version/path to
+# match what you installed (e.g. C:/Qt/6.11.1/msvc2022_64).
+cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/<your-qt-version>/msvc2022_64"
 cmake --build build --config Release
 ```
 
-Or open the folder in Visual Studio via **File → Open → CMake...**, set `CMAKE_PREFIX_PATH` in **CMake Settings** to your Qt path, then build.
+> **No Qt?** Just omit `-DCMAKE_PREFIX_PATH`. CMake will build only the `anre`
+> command-line tool — no GUI, no Qt required.
 
-This produces two executables:
+CMake auto-detects your installed Visual Studio. You can also open the folder in
+Visual Studio via **File → Open → CMake...**, set `CMAKE_PREFIX_PATH` in **CMake
+Settings**, and build from there.
+
+This produces:
 
 | Target | Output | Purpose |
 |--------|--------|---------|
-| `ghostwire` | `build\Release\ghostwire.exe` | Desktop UI |
+| `ghostwire` | `build\Release\ghostwire.exe` | Desktop app |
 | `anre` | `build\Release\anre.exe` | Command-line tool |
-
-If Qt is not found, only `anre` (CLI) is built.
 
 ## Run the GUI
 
@@ -87,31 +137,30 @@ If Qt is not found, only `anre` (CLI) is built.
 .\build\Release\ghostwire.exe
 ```
 
-1. **Collect from Sysmon** — reads live telemetry (run as Administrator, Sysmon required)
-2. **Import CSV file** — load your own event export
+- **Scan This Computer** — snapshot and analyse this machine right now
+- **Import CSV file** — load an event export
+- **Load example attack** — see what a real detection looks like
 
-The interface includes:
-
-- **Overview** — risk score, threat level, incident summary
-- **Narrative** — MITRE-aligned attack story
-- **Timeline** — chronological event sequence
-- **Process Chain** — parent/child process tree
-- **Events** — raw event table
+Tabs: **Overview** (score, verdict, what stood out) · **Narrative** (the attack
+story) · **Timeline** · **Process Chain** · **Events**.
 
 ## Run the CLI
 
 ```powershell
-# Live Sysmon collection (Administrator + Sysmon installed)
-.\build\Release\anre.exe sysmon 200
+# Scan this computer (this is also what you get with no arguments)
+.\build\Release\anre.exe scan
 
-# Import custom events
+# See the example attack
+.\build\Release\anre.exe demo
+
+# Import your own events
 .\build\Release\anre.exe import C:\path\to\events.csv
 
-# Built-in demo scenario
-.\build\Release\anre.exe demo
+# Pull from Sysmon (Administrator + Sysmon installed)
+.\build\Release\anre.exe sysmon 200
 ```
 
-Output is written to `data/events.csv` and `data/chain_*.txt`.
+Results are also written to `data/events.csv` and `data/chain_*.txt`.
 
 ## CSV import format
 
@@ -123,10 +172,16 @@ powershell.exe,6200,5124,chrome.exe,NetworkConnect,198.51.100.10:443,2026-06-16T
 
 ## Stretch goals
 
-- SQLite backend instead of CSV
-- LLM-powered incident summaries via local or API model
-- Sigma rule integration for richer detections
+- Watch mode that re-scans on an interval and alerts on new suspicious activity
+- IPv6 connections and reverse-DNS / reputation lookups for remote hosts
+- Signed-binary / publisher checks to cut false positives further
+- SQLite backend and Sigma-rule-driven detections
 
 ## Interview pitch
 
-Most student security projects stop at port scanners or packet sniffers. Ghostwire asks a harder question: **can a computer explain an attack the way a security analyst would?** That combines systems programming, graph algorithms, security domain knowledge, and product-style engineering.
+Most student security projects stop at port scanners or packet sniffers.
+Ghostwire asks a harder question: **can a program look at a real computer and
+explain, the way an analyst would, whether anything bad is happening?** That
+combines live systems programming (Win32 process + network APIs), graph
+algorithms, security domain knowledge, and product-style engineering focused on
+keeping false positives low enough that a non-expert can actually use it.
