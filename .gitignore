@@ -1,0 +1,8 @@
+build/
+out/
+.vs/
+x64/
+Debug/
+Release/
+data/events.csv
+data/chain_*.txt

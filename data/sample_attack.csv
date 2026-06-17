@@ -1,0 +1,8 @@
+processName,processId,parentProcessId,parentProcessName,action,target,timestamp
+Acrobat.exe,4100,1200,explorer.exe,ProcessCreate,C:\Users\User\Downloads\invoice.pdf,10:00:01
+cmd.exe,4200,4100,Acrobat.exe,ProcessCreate,C:\Windows\System32\cmd.exe,10:01:04
+powershell.exe,4300,4200,cmd.exe,ProcessCreate,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe,10:01:09
+powershell.exe,4300,4200,cmd.exe,FileCreate,C:\Users\User\AppData\Local\Temp\malware.exe,10:02:11
+malware.exe,4400,4300,powershell.exe,ProcessCreate,C:\Users\User\AppData\Local\Temp\malware.exe,10:02:18
+malware.exe,4400,4300,powershell.exe,RegistryValueSet,HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Updater,10:02:45
+malware.exe,4400,4300,powershell.exe,NetworkConnect,203.0.113.44:443,10:03:02
