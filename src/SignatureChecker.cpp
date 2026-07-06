@@ -64,7 +64,8 @@ std::string publisherFrom(const std::wstring& signedFilePath) {
 
     std::string publisher;
     DWORD signerSize = 0;
-    if (CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signerSize) && signerSize > 0) {
+    if (CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signerSize) &&
+        signerSize > 0 && signerSize < 16u * 1024 * 1024) {
         std::vector<BYTE> signerBuffer(signerSize);
         if (CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0, signerBuffer.data(), &signerSize)) {
             auto* signer = reinterpret_cast<CMSG_SIGNER_INFO*>(signerBuffer.data());
@@ -144,8 +145,13 @@ SignatureStatus verifyCatalog(const std::wstring& path, std::string& publisherOu
 
     DWORD hashSize = 0;
     CryptCATAdminCalcHashFromFileHandle(file, &hashSize, nullptr, 0);
+    if (hashSize == 0 || hashSize > 4096) { // a file hash is tens of bytes; anything else is bogus
+        CryptCATAdminReleaseContext(admin, 0);
+        CloseHandle(file);
+        return SignatureStatus::Unsigned;
+    }
     std::vector<BYTE> hash(hashSize);
-    if (hashSize == 0 || !CryptCATAdminCalcHashFromFileHandle(file, &hashSize, hash.data(), 0)) {
+    if (!CryptCATAdminCalcHashFromFileHandle(file, &hashSize, hash.data(), 0)) {
         CryptCATAdminReleaseContext(admin, 0);
         CloseHandle(file);
         return SignatureStatus::Unsigned;

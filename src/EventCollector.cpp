@@ -521,6 +521,9 @@ std::vector<SecurityEvent> EventCollector::scanLiveSystem() {
     // IPv4
     DWORD tableSize = 0;
     GetExtendedTcpTable(nullptr, &tableSize, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (tableSize > 64u * 1024 * 1024) {
+        tableSize = 0; // reject an implausible size instead of trying to allocate it
+    }
     std::vector<unsigned char> buffer(tableSize);
     if (tableSize > 0 &&
         GetExtendedTcpTable(buffer.data(), &tableSize, FALSE, AF_INET,
@@ -560,6 +563,9 @@ std::vector<SecurityEvent> EventCollector::scanLiveSystem() {
     // IPv6
     DWORD table6Size = 0;
     GetExtendedTcpTable(nullptr, &table6Size, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (table6Size > 64u * 1024 * 1024) {
+        table6Size = 0;
+    }
     std::vector<unsigned char> buffer6(table6Size);
     if (table6Size > 0 &&
         GetExtendedTcpTable(buffer6.data(), &table6Size, FALSE, AF_INET6,

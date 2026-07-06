@@ -379,9 +379,17 @@ void MainWindow::onScanSystem() {
     }
     setScanning(true, "Scanning this computer — reading processes, signatures and connections…");
 
-    auto future = QtConcurrent::run([]() {
-        anre::EventCollector collector;
-        return collector.scanLiveSystem();
+    // The scan touches a lot of OS state on a worker thread. If anything in it
+    // throws (e.g. an API returns an odd buffer size and an allocation fails),
+    // swallow it here and return empty — an escaped exception on the pool thread
+    // would take the whole app down with no message.
+    auto future = QtConcurrent::run([]() -> std::vector<anre::SecurityEvent> {
+        try {
+            anre::EventCollector collector;
+            return collector.scanLiveSystem();
+        } catch (...) {
+            return {};
+        }
     });
     scanWatcher_->setFuture(future);
 }
@@ -389,12 +397,19 @@ void MainWindow::onScanSystem() {
 void MainWindow::onScanFinished() {
     setScanning(false, QString());
 
-    const std::vector<anre::SecurityEvent> events = scanWatcher_->future().result();
+    std::vector<anre::SecurityEvent> events;
+    try {
+        events = scanWatcher_->future().result();
+    } catch (...) {
+        events.clear();
+    }
+
     if (events.empty()) {
         QMessageBox::information(
             this,
             "Scan unavailable",
-            "Could not read the running process list on this system.\n\n"
+            "The scan didn't return anything. Either the process list couldn't be read "
+            "on this system, or the scan was interrupted.\n\n"
             "Try the example attack to see how Ghostwire works.");
         setStatus("Scan failed");
         return;
@@ -410,6 +425,10 @@ void MainWindow::onLoadDemo() {
 
 void MainWindow::openExampleAttack() {
     onLoadDemo();
+}
+
+void MainWindow::startScan() {
+    onScanSystem();
 }
 
 void MainWindow::onImportCsv() {

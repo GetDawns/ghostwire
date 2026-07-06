@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.2 — 2026-07-06
+
+Fixes a crash where pressing **Scan This Computer** could close the app with no
+message.
+
+- The live scan runs on a background thread; if anything in it threw (most
+  likely an allocation failing when a Windows API reported an unexpected buffer
+  size), the exception escaped the worker thread and terminated the whole
+  process silently. The scan is now wrapped so any failure surfaces as a normal
+  "scan unavailable" message instead of killing the app.
+- Hardened the scan's buffer allocations: the TCP connection table and the
+  Authenticode hash/signer buffers now reject implausible sizes instead of
+  attempting a huge allocation.
+- The `anre` CLI scan degrades gracefully on error too.
+- Added a `ghostwire --scan` launch flag (kick off a scan on startup).
+
 ## 2.0.1 — 2026-07-06
 
 Bug fixes and hardening found by a new stress/fuzz suite.

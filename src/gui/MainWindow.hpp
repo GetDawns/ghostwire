@@ -34,6 +34,9 @@ public:
     // Import a CSV of events by path (used for `ghostwire <file.csv>`).
     void openCsv(const QString& path);
 
+    // Kick off a live scan (used for `ghostwire --scan`).
+    void startScan();
+
 private slots:
     void onScanSystem();
     void onScanFinished();

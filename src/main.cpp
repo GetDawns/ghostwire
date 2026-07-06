@@ -118,7 +118,12 @@ int main(int argc, char* argv[]) {
 
     if (mode == "scan") {
         std::cout << "Scanning this computer - running processes and active connections...\n";
-        events = collector.scanLiveSystem();
+        try {
+            events = collector.scanLiveSystem();
+        } catch (const std::exception& e) {
+            std::cout << "The scan hit an error: " << e.what() << "\n";
+            events.clear();
+        }
         if (events.empty()) {
             std::cout << "Could not read the process list on this system.\n";
             std::cout << "Showing the built-in example instead...\n\n";

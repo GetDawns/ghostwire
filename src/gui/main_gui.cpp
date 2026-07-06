@@ -8,7 +8,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("Ghostwire");
     QApplication::setOrganizationName("Ghostwire");
-    QApplication::setApplicationVersion("2.0.1");
+    QApplication::setApplicationVersion("2.0.2");
 
     MainWindow window;
     window.show();
@@ -18,6 +18,8 @@ int main(int argc, char* argv[]) {
     const QStringList args = QApplication::arguments();
     if (args.contains("--demo")) {
         window.openExampleAttack();
+    } else if (args.contains("--scan")) {
+        window.startScan();
     } else {
         for (int i = 1; i < args.size(); ++i) {
             if (!args[i].startsWith('-') && QFile::exists(args[i])) {
