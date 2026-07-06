@@ -2,6 +2,7 @@
 #include "GuiUtil.hpp"
 
 #include <QHeaderView>
+#include <QLineEdit>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -30,6 +31,11 @@ EventsTablePanel::EventsTablePanel(QWidget* parent)
     : QWidget(parent) {
     setObjectName("panel");
 
+    filter_ = new QLineEdit;
+    filter_->setObjectName("filterBox");
+    filter_->setPlaceholderText("Filter events — process, IP, path, category…");
+    filter_->setClearButtonEnabled(true);
+
     table_ = new QTableWidget(this);
     table_->setColumnCount(8);
     table_->setHorizontalHeaderLabels({
@@ -45,7 +51,26 @@ EventsTablePanel::EventsTablePanel(QWidget* parent)
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(16, 16, 16, 16);
+    layout->setSpacing(12);
+    layout->addWidget(filter_);
     layout->addWidget(table_);
+
+    connect(filter_, &QLineEdit::textChanged, this, &EventsTablePanel::applyFilter);
+}
+
+void EventsTablePanel::applyFilter(const QString& text) {
+    const QString needle = text.trimmed().toLower();
+    for (int row = 0; row < table_->rowCount(); ++row) {
+        bool match = needle.isEmpty();
+        for (int col = 0; col < table_->columnCount() && !match; ++col) {
+            if (QTableWidgetItem* item = table_->item(row, col)) {
+                if (item->text().toLower().contains(needle)) {
+                    match = true;
+                }
+            }
+        }
+        table_->setRowHidden(row, !match);
+    }
 }
 
 void EventsTablePanel::setChain(const anre::AttackChain& chain) {
@@ -65,4 +90,5 @@ void EventsTablePanel::setChain(const anre::AttackChain& chain) {
     }
 
     table_->resizeColumnsToContents();
+    applyFilter(filter_->text());
 }

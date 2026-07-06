@@ -57,8 +57,12 @@ void TimelineViewer::printChain(const AttackChain& chain) {
     if (chain.findings.empty()) {
         std::cout << "  Nothing — no suspicious process chains or connections found.\n";
     } else {
-        for (const std::string& finding : chain.findings) {
-            std::cout << "  ! " << finding << '\n';
+        for (const Finding& finding : chain.findings) {
+            std::cout << "  [" << severityName(finding.severity) << "] " << finding.title << '\n';
+            std::cout << "      " << finding.detail << '\n';
+            if (!finding.mitreId.empty()) {
+                std::cout << "      ATT&CK " << finding.mitreId << " — " << finding.mitreName << '\n';
+            }
         }
     }
 

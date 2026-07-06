@@ -6,3 +6,4 @@ Debug/
 Release/
 data/events.csv
 data/chain_*.txt
+data/report.html
