@@ -4,29 +4,38 @@
 #include "IncidentPanel.hpp"
 #include "ProcessGraphPanel.hpp"
 #include "TimelinePanel.hpp"
+#include "WelcomePanel.hpp"
 
 #include "anre/AttackChainBuilder.hpp"
 #include "anre/EventCollector.hpp"
 #include "anre/EventDatabase.hpp"
+#include "anre/ReportWriter.hpp"
 
 #include <QApplication>
-#include <QButtonGroup>
+#include <QDesktopServices>
 #include <QFile>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
-#include <QScrollArea>
+#include <QStackedWidget>
 #include <QTabWidget>
+#include <QUrl>
 #include <QVBoxLayout>
+#include <QtConcurrent>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
     setWindowTitle("Ghostwire");
-    resize(1280, 820);
-    setMinimumSize(960, 640);
+    resize(1300, 840);
+    setMinimumSize(1000, 660);
+
+    scanWatcher_ = new QFutureWatcher<std::vector<anre::SecurityEvent>>(this);
+    connect(scanWatcher_, &QFutureWatcher<std::vector<anre::SecurityEvent>>::finished,
+            this, &MainWindow::onScanFinished);
 
     applyStyle();
     buildLayout();
@@ -51,41 +60,49 @@ void MainWindow::buildLayout() {
     // ---- sidebar ----
     auto* sidebar = new QWidget;
     sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(228);
+    sidebar->setFixedWidth(236);
 
     auto* sidebarLayout = new QVBoxLayout(sidebar);
     sidebarLayout->setContentsMargins(16, 20, 16, 16);
     sidebarLayout->setSpacing(6);
 
+    auto* brandRow = new QHBoxLayout;
+    brandRow->setSpacing(8);
+    auto* brandDot = new QLabel("●");
+    brandDot->setObjectName("brandDot");
     auto* brand = new QLabel("Ghostwire");
     brand->setObjectName("brandLabel");
+    brandRow->addWidget(brandDot);
+    brandRow->addWidget(brand);
+    brandRow->addStretch();
+    sidebarLayout->addLayout(brandRow);
+
     auto* brandSub = new QLabel("Attack Narrative Engine");
     brandSub->setObjectName("brandSub");
-    sidebarLayout->addWidget(brand);
     sidebarLayout->addWidget(brandSub);
-    sidebarLayout->addSpacing(20);
+    sidebarLayout->addSpacing(22);
 
     auto* sourceHeader = new QLabel("DATA SOURCES");
     sourceHeader->setObjectName("sectionHeader");
     sidebarLayout->addWidget(sourceHeader);
     sidebarLayout->addSpacing(4);
 
-    auto* scanBtn = new QPushButton("Scan This Computer");
-    scanBtn->setObjectName("primaryBtn");
-    scanBtn->setCursor(Qt::PointingHandCursor);
+    scanBtn_ = new QPushButton("Scan This Computer");
+    scanBtn_->setObjectName("primaryBtn");
+    scanBtn_->setCursor(Qt::PointingHandCursor);
 
-    auto* csvBtn = new QPushButton("Import CSV file");
-    csvBtn->setObjectName("sourceBtn");
-    csvBtn->setCursor(Qt::PointingHandCursor);
+    csvBtn_ = new QPushButton("Import CSV file");
+    csvBtn_->setObjectName("sourceBtn");
+    csvBtn_->setCursor(Qt::PointingHandCursor);
 
-    auto* demoBtn = new QPushButton("Load example attack");
-    demoBtn->setObjectName("sourceBtn");
-    demoBtn->setCursor(Qt::PointingHandCursor);
+    demoBtn_ = new QPushButton("Load example attack");
+    demoBtn_->setObjectName("sourceBtn");
+    demoBtn_->setCursor(Qt::PointingHandCursor);
 
-    sidebarLayout->addWidget(scanBtn);
-    sidebarLayout->addWidget(csvBtn);
-    sidebarLayout->addWidget(demoBtn);
-    sidebarLayout->addSpacing(20);
+    sidebarLayout->addWidget(scanBtn_);
+    sidebarLayout->addWidget(csvBtn_);
+    sidebarLayout->addWidget(demoBtn_);
+    sidebarLayout->addSpacing(22);
 
     auto* incidentHeader = new QLabel("INCIDENTS");
     incidentHeader->setObjectName("sectionHeader");
@@ -93,12 +110,10 @@ void MainWindow::buildLayout() {
     sidebarLayout->addSpacing(4);
 
     auto* incidentListHost = new QWidget;
-    auto* incidentListLayout = new QVBoxLayout(incidentListHost);
-    incidentListLayout->setContentsMargins(0, 0, 0, 0);
-    incidentListLayout->setSpacing(0);
-    incidentListLayout_ = incidentListLayout;
+    incidentListLayout_ = new QVBoxLayout(incidentListHost);
+    incidentListLayout_->setContentsMargins(0, 0, 0, 0);
+    incidentListLayout_->setSpacing(0);
     sidebarLayout->addWidget(incidentListHost, 1);
-
     sidebarLayout->addStretch(0);
 
     // ---- main column ----
@@ -107,10 +122,10 @@ void MainWindow::buildLayout() {
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    auto* headerBar = new QWidget;
-    headerBar->setObjectName("headerBar");
-    auto* headerLayout = new QHBoxLayout(headerBar);
-    headerLayout->setContentsMargins(20, 0, 20, 0);
+    headerBar_ = new QWidget;
+    headerBar_->setObjectName("headerBar");
+    auto* headerLayout = new QHBoxLayout(headerBar_);
+    headerLayout->setContentsMargins(22, 0, 22, 0);
 
     incidentTitle_ = new QLabel("No incident loaded");
     incidentTitle_->setObjectName("incidentTitle");
@@ -119,15 +134,28 @@ void MainWindow::buildLayout() {
     headerBadge_->setObjectName("badgeLow");
     headerBadge_->hide();
 
+    exportBtn_ = new QPushButton("Export report");
+    exportBtn_->setCursor(Qt::PointingHandCursor);
+    exportBtn_->setEnabled(false);
+
     refreshBtn_ = new QPushButton("Refresh");
+    refreshBtn_->setCursor(Qt::PointingHandCursor);
     refreshBtn_->setEnabled(false);
-    refreshBtn_->setFixedWidth(90);
+    refreshBtn_->setFixedWidth(92);
 
     headerLayout->addWidget(incidentTitle_);
     headerLayout->addSpacing(12);
     headerLayout->addWidget(headerBadge_);
     headerLayout->addStretch();
+    headerLayout->addWidget(exportBtn_);
+    headerLayout->addSpacing(8);
     headerLayout->addWidget(refreshBtn_);
+    headerBar_->hide();
+
+    // Stack: welcome first, results (tabs) after a scan.
+    stack_ = new QStackedWidget;
+
+    welcomePanel_ = new WelcomePanel;
 
     tabs_ = new QTabWidget;
     overviewPanel_ = new IncidentPanel;
@@ -137,9 +165,16 @@ void MainWindow::buildLayout() {
 
     narrativeHost_ = new QWidget;
     narrativeHost_->setObjectName("panel");
-    narrativeLayout_ = new QVBoxLayout(narrativeHost_);
-    narrativeLayout_->setContentsMargins(20, 20, 20, 20);
-    narrativeLayout_->setSpacing(10);
+    {
+        auto* narrativeScrollHost = new QVBoxLayout(narrativeHost_);
+        narrativeScrollHost->setContentsMargins(0, 0, 0, 0);
+        auto* inner = new QWidget;
+        inner->setObjectName("panel");
+        narrativeLayout_ = new QVBoxLayout(inner);
+        narrativeLayout_->setContentsMargins(22, 22, 22, 22);
+        narrativeLayout_->setSpacing(10);
+        narrativeScrollHost->addWidget(inner);
+    }
 
     tabs_->addTab(overviewPanel_, "Overview");
     tabs_->addTab(narrativeHost_, "Narrative");
@@ -147,35 +182,70 @@ void MainWindow::buildLayout() {
     tabs_->addTab(graphPanel_, "Process Chain");
     tabs_->addTab(eventsPanel_, "Events");
 
-    mainLayout->addWidget(headerBar);
-    mainLayout->addWidget(tabs_, 1);
+    stack_->addWidget(welcomePanel_);
+    stack_->addWidget(tabs_);
+    stack_->setCurrentWidget(welcomePanel_);
 
-    root->addWidget(sidebar);
-    root->addWidget(mainColumn, 1);
+    mainLayout->addWidget(headerBar_);
+    mainLayout->addWidget(stack_, 1);
 
     // ---- status bar ----
     auto* status = new QWidget;
     status->setObjectName("statusBar");
-    status->setFixedHeight(28);
+    status->setFixedHeight(30);
     auto* statusLayout = new QHBoxLayout(status);
     statusLayout->setContentsMargins(16, 0, 16, 0);
+    statusLayout->setSpacing(12);
 
     statusLeft_ = new QLabel("Ready");
+    busyBar_ = new QProgressBar;
+    busyBar_->setRange(0, 0); // indeterminate
+    busyBar_->setFixedWidth(120);
+    busyBar_->setTextVisible(false);
+    busyBar_->hide();
     statusRight_ = new QLabel;
+
     statusLayout->addWidget(statusLeft_);
     statusLayout->addStretch();
+    statusLayout->addWidget(busyBar_);
     statusLayout->addWidget(statusRight_);
 
     mainLayout->addWidget(status);
 
-    connect(scanBtn, &QPushButton::clicked, this, &MainWindow::onScanSystem);
-    connect(csvBtn, &QPushButton::clicked, this, &MainWindow::onImportCsv);
-    connect(demoBtn, &QPushButton::clicked, this, &MainWindow::onLoadDemo);
+    root->addWidget(sidebar);
+    root->addWidget(mainColumn, 1);
+
+    connect(scanBtn_, &QPushButton::clicked, this, &MainWindow::onScanSystem);
+    connect(csvBtn_, &QPushButton::clicked, this, &MainWindow::onImportCsv);
+    connect(demoBtn_, &QPushButton::clicked, this, &MainWindow::onLoadDemo);
     connect(refreshBtn_, &QPushButton::clicked, this, &MainWindow::onRefresh);
+    connect(exportBtn_, &QPushButton::clicked, this, &MainWindow::onExportReport);
+
+    connect(welcomePanel_, &WelcomePanel::scanRequested, this, &MainWindow::onScanSystem);
+    connect(welcomePanel_, &WelcomePanel::demoRequested, this, &MainWindow::onLoadDemo);
+    connect(welcomePanel_, &WelcomePanel::importRequested, this, &MainWindow::onImportCsv);
 }
 
 void MainWindow::setStatus(const QString& message) {
     statusLeft_->setText(message);
+}
+
+void MainWindow::setScanning(bool scanning, const QString& message) {
+    scanning_ = scanning;
+    scanBtn_->setEnabled(!scanning);
+    csvBtn_->setEnabled(!scanning);
+    demoBtn_->setEnabled(!scanning);
+    refreshBtn_->setEnabled(!scanning && !currentEvents_.empty());
+    welcomePanel_->setEnabled(!scanning);
+    busyBar_->setVisible(scanning);
+    if (!message.isEmpty()) {
+        setStatus(message);
+    }
+}
+
+void MainWindow::showResults() {
+    headerBar_->show();
+    stack_->setCurrentWidget(tabs_);
 }
 
 void MainWindow::loadEvents(const std::vector<anre::SecurityEvent>& events, const QString& sourceLabel) {
@@ -189,14 +259,17 @@ void MainWindow::loadEvents(const std::vector<anre::SecurityEvent>& events, cons
 
     anre::AttackChainBuilder builder;
     currentChain_ = builder.build(events, nextChainId_++);
+    currentChain_.source = stdstr(sourceLabel);
 
     anre::EventDatabase database("data");
     database.saveEvents(events);
     database.saveChain(currentChain_);
 
+    showResults();
     displayChain(currentChain_);
     addIncidentEntry(currentChain_);
     refreshBtn_->setEnabled(true);
+    exportBtn_->setEnabled(true);
 
     setStatus(QString("Loaded %1 events from %2").arg(events.size()).arg(sourceLabel));
     statusRight_->setText(QString("Saved to data/  ·  Chain #%1").arg(currentChain_.id));
@@ -215,6 +288,8 @@ void MainWindow::displayChain(const anre::AttackChain& chain) {
         headerBadge_->setObjectName("badgeHigh");
     } else if (level.compare("Medium", Qt::CaseInsensitive) == 0) {
         headerBadge_->setObjectName("badgeMedium");
+    } else if (level.compare("Clean", Qt::CaseInsensitive) == 0) {
+        headerBadge_->setObjectName("badgeClean");
     } else {
         headerBadge_->setObjectName("badgeLow");
     }
@@ -233,8 +308,11 @@ void MainWindow::displayChain(const anre::AttackChain& chain) {
     }
 
     if (chain.narrative.empty()) {
-        auto* empty = new QLabel("No narrative sections were generated for this event set.");
+        auto* empty = new QLabel(
+            "No step-by-step attack story for this scan — that's normal when findings are "
+            "about individual programs rather than a chain of events. See the Overview tab.");
         empty->setObjectName("phaseLine");
+        empty->setWordWrap(true);
         narrativeLayout_->addWidget(empty);
     } else {
         for (const anre::NarrativeSection& section : chain.narrative) {
@@ -242,7 +320,7 @@ void MainWindow::displayChain(const anre::AttackChain& chain) {
             card->setObjectName("phaseCard");
 
             auto* cardLayout = new QVBoxLayout(card);
-            cardLayout->setContentsMargins(14, 12, 14, 12);
+            cardLayout->setContentsMargins(16, 12, 16, 12);
             cardLayout->setSpacing(6);
 
             auto* title = new QLabel(qstr(section.phaseLabel).toUpper());
@@ -250,7 +328,7 @@ void MainWindow::displayChain(const anre::AttackChain& chain) {
             cardLayout->addWidget(title);
 
             for (const std::string& line : section.lines) {
-                auto* row = new QLabel(QString("  %1").arg(qstr(line)));
+                auto* row = new QLabel(QString("•  %1").arg(qstr(line)));
                 row->setObjectName("phaseLine");
                 row->setWordWrap(true);
                 row->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -274,7 +352,7 @@ void MainWindow::addIncidentEntry(const anre::AttackChain& chain) {
     }
 
     auto* btn = new QPushButton(
-        QString("#%1  ·  %2  ·  %3")
+        QString("#%1  ·  %2  ·  %3 events")
             .arg(chain.id)
             .arg(qstr(chain.threatLevel))
             .arg(chain.events.size()));
@@ -287,17 +365,30 @@ void MainWindow::addIncidentEntry(const anre::AttackChain& chain) {
     activeIncidentBtn_ = btn;
 
     connect(btn, &QPushButton::clicked, this, [this, chain]() {
+        showResults();
         displayChain(chain);
         incidentTitle_->setText(qstr(chain.title));
+        exportBtn_->setEnabled(true);
     });
 }
 
 void MainWindow::onScanSystem() {
-    setStatus("Scanning this computer…");
+    if (scanning_) {
+        return;
+    }
+    setScanning(true, "Scanning this computer — reading processes, signatures and connections…");
 
-    anre::EventCollector collector;
-    const auto events = collector.scanLiveSystem();
+    auto future = QtConcurrent::run([]() {
+        anre::EventCollector collector;
+        return collector.scanLiveSystem();
+    });
+    scanWatcher_->setFuture(future);
+}
 
+void MainWindow::onScanFinished() {
+    setScanning(false, QString());
+
+    const std::vector<anre::SecurityEvent> events = scanWatcher_->future().result();
     if (events.empty()) {
         QMessageBox::information(
             this,
@@ -316,26 +407,23 @@ void MainWindow::onLoadDemo() {
     loadEvents(collector.loadDemoScenario(), "Example attack");
 }
 
+void MainWindow::openExampleAttack() {
+    onLoadDemo();
+}
+
 void MainWindow::onImportCsv() {
     const QString path = QFileDialog::getOpenFileName(
-        this,
-        "Import event log",
-        QString(),
-        "CSV files (*.csv);;All files (*.*)");
-
+        this, "Import event log", QString(), "CSV files (*.csv);;All files (*.*)");
     if (path.isEmpty()) {
         return;
     }
 
     setStatus("Importing CSV…");
-
     anre::EventCollector collector;
     const auto events = collector.loadFromFile(stdstr(path));
-
     if (events.empty()) {
         QMessageBox::warning(
-            this,
-            "Import failed",
+            this, "Import failed",
             "The selected file could not be parsed or contains no valid events.");
         setStatus("CSV import failed");
         return;
@@ -345,7 +433,7 @@ void MainWindow::onImportCsv() {
 }
 
 void MainWindow::onRefresh() {
-    if (currentEvents_.empty()) {
+    if (currentEvents_.empty() || scanning_) {
         return;
     }
 
@@ -361,4 +449,25 @@ void MainWindow::onRefresh() {
     anre::EventCollector collector;
     const auto events = collector.loadFromFile(stdstr(currentSource_));
     loadEvents(events, currentSource_);
+}
+
+void MainWindow::onExportReport() {
+    if (currentEvents_.empty()) {
+        return;
+    }
+
+    const QString suggested = QString("ghostwire-report-%1.html").arg(currentChain_.id);
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export report", suggested, "HTML files (*.html);;All files (*.*)");
+    if (path.isEmpty()) {
+        return;
+    }
+
+    if (anre::ReportWriter::writeHtml(currentChain_, stdstr(path))) {
+        setStatus("Report saved");
+        statusRight_->setText("Report exported");
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    } else {
+        QMessageBox::warning(this, "Export failed", "Could not write the report to that location.");
+    }
 }

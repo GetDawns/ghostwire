@@ -159,10 +159,34 @@ std::vector<NarrativeSection> NarrativeGenerator::generate(
 std::string NarrativeGenerator::generateSummary(const AttackChain& chain) {
     // Nothing matched a known-bad pattern — say so plainly instead of inventing
     // an attack. This is the normal result of scanning a healthy machine.
-    if (chain.findings.empty() && chain.riskScore < 35) {
+    if (chain.findings.empty()) {
         return "Nothing in this snapshot matches a known attack pattern. The "
                "processes and connections here look normal. (This is a quick "
                "heuristic check, not a full antivirus scan.)";
+    }
+
+    // Some findings don't come with a narrative arc — e.g. a live scan that
+    // spotted an unsigned program in a temp folder but no full kill chain. In
+    // that case, summarise straight from the findings instead of forcing a
+    // "the activity started when..." story that never happened.
+    bool hasNarrative = false;
+    for (const NarrativeSection& section : chain.narrative) {
+        if (!section.lines.empty()) {
+            hasNarrative = true;
+            break;
+        }
+    }
+    if (!hasNarrative) {
+        std::ostringstream plain;
+        plain << "This scan turned up " << chain.findings.size() << " thing"
+              << (chain.findings.size() == 1 ? "" : "s") << " worth a look";
+        const std::size_t show = chain.findings.size() < 3 ? chain.findings.size() : 3;
+        for (std::size_t i = 0; i < show; ++i) {
+            plain << (i == 0 ? ": " : (i + 1 == show ? "; and " : "; "))
+                  << chain.findings[i].title;
+        }
+        plain << ". Risk score: " << chain.riskScore << "/100 (" << chain.threatLevel << ").";
+        return plain.str();
     }
 
     std::ostringstream summary;
@@ -196,8 +220,6 @@ std::string NarrativeGenerator::generateSummary(const AttackChain& chain) {
         summary << " from suspicious process activity";
     }
 
-    summary << ". ";
-
     std::vector<std::string> middle;
     for (const NarrativeSection& section : chain.narrative) {
         if (section.phase == MitrePhase::Execution ||
@@ -207,18 +229,16 @@ std::string NarrativeGenerator::generateSummary(const AttackChain& chain) {
         }
     }
 
-    for (std::size_t i = 0; i < middle.size(); ++i) {
-        if (i == 0) {
-            summary << "The chain then ";
-        } else if (i + 1 == middle.size()) {
-            summary << ", and ";
-        } else {
-            summary << ", ";
+    if (!middle.empty()) {
+        summary << ". The chain then ";
+        for (std::size_t i = 0; i < middle.size(); ++i) {
+            if (i > 0) {
+                summary << (i + 1 == middle.size() ? ", and " : ", ");
+            }
+            // Keep the original wording (so "PowerShell", "cmd.exe" etc. read
+            // naturally); just make sure the clause starts with a capital.
+            summary << capitalize(middle[i]);
         }
-
-        // Keep the original wording (so "PowerShell", "cmd.exe" etc. read
-        // naturally); just make sure the clause starts with a capital.
-        summary << capitalize(middle[i]);
     }
 
     summary << ". Risk score: " << chain.riskScore << "/100 (" << chain.threatLevel << ").";

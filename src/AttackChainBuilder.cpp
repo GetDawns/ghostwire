@@ -60,10 +60,19 @@ AttackChain AttackChainBuilder::build(
     chain.events = events;
     chain.graph = relationships.buildGraph(events);
     chain.narrative = narrativeGenerator.generate(events, chain.graph);
-    chain.riskScore = scorer.scoreChain(events);
-    chain.threatLevel = scorer.threatLevel(chain.riskScore);
+
+    const AnalysisResult analysis = scorer.analyze(events);
+    chain.riskScore = analysis.score;
+    chain.threatLevel = analysis.level;
+    chain.findings = analysis.findings;
     chain.timeline = buildTimeline(events);
-    chain.findings = scorer.findThreats(events);
+
+    chain.processCount = static_cast<int>(chain.graph.size());
+    for (const SecurityEvent& event : events) {
+        if (event.category == EventCategory::NetworkConnection) {
+            ++chain.networkCount;
+        }
+    }
     return chain;
 }
 

@@ -5,6 +5,7 @@
 #include <QWidget>
 
 class QTableWidget;
+class QLineEdit;
 
 class EventsTablePanel : public QWidget {
     Q_OBJECT
@@ -15,5 +16,8 @@ public:
     void setChain(const anre::AttackChain& chain);
 
 private:
+    void applyFilter(const QString& text);
+
     QTableWidget* table_ = nullptr;
+    QLineEdit* filter_ = nullptr;
 };

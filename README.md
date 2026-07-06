@@ -2,24 +2,35 @@
 
 Ghostwire is a self-service security check for your own Windows PC. Click one
 button (or run one command) and it looks at everything running on your machine —
-every process, who started it, and what it's talking to on the internet — then
-tells you in plain English whether anything looks wrong.
+every process, who started it, whether it's **digitally signed**, and what it's
+talking to on the internet — then tells you in plain English whether anything
+looks wrong, and maps what it finds to real **MITRE ATT&CK** techniques.
 
 Think of it as the "is something sketchy happening on my computer?" check you'd
 normally need an IT person for. No agent to install, no Sysmon, no administrator
 rights required.
+
+> **New in 2.0:** Authenticode signature verification, system-process
+> masquerade detection, MITRE ATT&CK tagging, IPv6 connections, reverse DNS,
+> a shareable HTML report, a `watch` mode, and a rebuilt desktop UI with a live
+> risk gauge and severity-ranked findings.
 
 ## What it does
 
 When you scan, Ghostwire:
 
 1. Lists every running process and its parent (via the Windows process snapshot API).
-2. Maps each active outbound connection to the process that opened it.
-3. Builds the parent → child process tree.
-4. Flags known-bad patterns — e.g. a Word document or PDF reader launching
-   PowerShell, a program running from a temp folder, or a suspicious process
-   phoning home.
-5. Gives you a risk score, a threat level, and a short list of **what stood out**.
+2. **Verifies the Authenticode signature** of programs in user-writable folders —
+   so it can *trust* code signed by a known publisher and *flag* what isn't.
+3. Maps each active outbound connection (IPv4 **and IPv6**) to the process that
+   opened it, with best-effort reverse DNS on anything suspicious.
+4. Builds the parent → child process tree.
+5. Flags known-bad patterns — a Word/PDF app launching PowerShell, a program
+   running unsigned from a temp folder, a core Windows name (`svchost.exe`,
+   `lsass.exe`, …) running from the wrong place, a double-extension lure
+   (`invoice.pdf.exe`), a suspicious process phoning home.
+6. Gives you a risk score, a threat level, and a ranked list of **what stood
+   out** — each item tagged with its MITRE ATT&CK technique.
 
 On a healthy machine you get the boring (good) answer:
 
@@ -28,38 +39,24 @@ What stood out
 -------------
   Nothing — no suspicious process chains or connections found.
 
-Risk Score: 10/100
-Threat Level: Low
-
-Summary
-Nothing in this snapshot matches a known attack pattern. The processes and
-connections here look normal. (This is a quick heuristic check, not a full
-antivirus scan.)
+Risk Score: 5/100
+Threat Level: Clean
 ```
 
 If something *does* match a known attack pattern (try `anre demo` to see it),
-you get the story instead:
+you get the story instead — ranked most-serious first:
 
 ```text
-Initial Access:
-  - A malicious PDF was opened
-Execution:
-  - PDF reader launched cmd.exe
-  - cmd.exe launched PowerShell
-  - PowerShell downloaded malware.exe
-Persistence:
-  - Malware made a startup registry key for persistence
-Command & Control:
-  - malware.exe connected to external host 203.0.113.44:443
-
 What stood out
 -------------
-  ! Acrobat.exe launched cmd.exe — apps like this rarely start command-line
-    tools; it's a common malware pattern.
-  ! malware.exe added a startup entry (HKCU\...\Run\Updater) — this makes a
-    program run automatically every time you log in.
-  ! malware.exe connected out to 203.0.113.44:443 — confirm you expect this
-    program to talk to the internet.
+  [Critical] Acrobat.exe launched cmd.exe
+      Document apps almost never start command-line tools. This is a hallmark of
+      a malicious document or exploit running code on the machine.
+      ATT&CK T1059 — Command and Scripting Interpreter
+  [High] malware.exe set itself to run at startup
+      ... ATT&CK T1547.001 — Boot or Logon Autostart Execution: Registry Run Keys
+  [High] malware.exe is talking to the internet
+      ... ATT&CK T1071 — Application Layer Protocol
 
 Risk Score: 100/100
 Threat Level: Critical
@@ -67,8 +64,17 @@ Threat Level: Critical
 
 > Ghostwire is a lightweight heuristic triage tool, not antivirus. It's good at
 > spotting suspicious *relationships* (who launched what, who's talking to the
-> internet). It won't catch everything, and a "Low" score is not a guarantee a
-> machine is clean.
+> internet, what's unsigned). It won't catch everything, and a "Clean" score is
+> not a guarantee a machine is uncompromised.
+
+## Why signatures matter
+
+Most simple scanners flag anything running from a temp or Downloads folder,
+which produces a wall of false positives (installers, updaters, portable apps
+all live there). Ghostwire checks the Authenticode signature first: a binary
+signed by a trusted publisher is left alone, and only the **unsigned** ones in
+those locations get called out. That one check does most of the work of keeping
+the noise low enough for a non-expert to act on.
 
 ## Where the data comes from
 
@@ -84,10 +90,12 @@ Threat Level: Critical
 | Module | Role |
 |--------|------|
 | `EventCollector` | Scans the live system, or reads demo data / CSV / Sysmon |
+| `SignatureChecker` | Authenticode + security-catalog verification, with a per-path cache |
 | `RelationshipEngine` | Builds the parent-child process tree (one node per process) |
-| `ThreatScoringEngine` | Scores risk and produces the plain-language findings |
+| `ThreatScoringEngine` | Scores risk and produces the ranked, MITRE-tagged findings |
 | `NarrativeGenerator` | Turns suspicious events into an analyst-style story |
 | `AttackChainBuilder` | Orchestrates the full reconstruction pipeline |
+| `ReportWriter` | Renders a self-contained, shareable HTML report |
 | `TimelineViewer` | Console output for the CLI |
 | `EventDatabase` | Persists events and chains to `data/` |
 | `ghostwire` (GUI) | Qt desktop app for reviewing a scan |
@@ -95,8 +103,8 @@ Threat Level: Critical
 ## Requirements
 
 - Windows 10/11
-- Visual Studio 2022 with the C++ desktop workload (for building)
-- **Qt 6 Widgets** — only needed for the GUI; the CLI builds without it
+- Visual Studio 2022 (or newer) with the C++ desktop workload (for building)
+- **Qt 6 Widgets + Concurrent** — only needed for the GUI; the CLI builds without it
 
 ## Build
 
@@ -120,10 +128,6 @@ cmake --build build --config Release
 > **No Qt?** Just omit `-DCMAKE_PREFIX_PATH`. CMake will build only the `anre`
 > command-line tool — no GUI, no Qt required.
 
-CMake auto-detects your installed Visual Studio. You can also open the folder in
-Visual Studio via **File → Open → CMake...**, set `CMAKE_PREFIX_PATH` in **CMake
-Settings**, and build from there.
-
 This produces:
 
 | Target | Output | Purpose |
@@ -131,18 +135,24 @@ This produces:
 | `ghostwire` | `build\Release\ghostwire.exe` | Desktop app |
 | `anre` | `build\Release\anre.exe` | Command-line tool |
 
+To run the GUI outside Visual Studio, copy the Qt runtime next to the exe once
+with `windeployqt build\Release\ghostwire.exe` (or use the packaged release).
+
 ## Run the GUI
 
 ```powershell
 .\build\Release\ghostwire.exe
+.\build\Release\ghostwire.exe --demo   # jump straight into the example attack
 ```
 
-- **Scan This Computer** — snapshot and analyse this machine right now
+- **Scan This Computer** — snapshot and analyse this machine right now (runs in
+  the background so the window stays responsive)
 - **Import CSV file** — load an event export
 - **Load example attack** — see what a real detection looks like
+- **Export report** — save a self-contained HTML report you can send to someone
 
-Tabs: **Overview** (score, verdict, what stood out) · **Narrative** (the attack
-story) · **Timeline** · **Process Chain** · **Events**.
+Tabs: **Overview** (risk gauge, verdict, ranked findings) · **Narrative** (the
+attack story) · **Timeline** · **Process Chain** · **Events** (searchable).
 
 ## Run the CLI
 
@@ -150,17 +160,22 @@ story) · **Timeline** · **Process Chain** · **Events**.
 # Scan this computer (this is also what you get with no arguments)
 .\build\Release\anre.exe scan
 
+# Keep watching and alert only on NEW findings (default every 60s)
+.\build\Release\anre.exe watch 30
+
 # See the example attack
 .\build\Release\anre.exe demo
 
-# Import your own events
-.\build\Release\anre.exe import C:\path\to\events.csv
+# Check one file's signature and publisher
+.\build\Release\anre.exe sig "C:\path\to\program.exe"
 
-# Pull from Sysmon (Administrator + Sysmon installed)
+# Import your own events / pull from Sysmon (admin + Sysmon installed)
+.\build\Release\anre.exe import C:\path\to\events.csv
 .\build\Release\anre.exe sysmon 200
 ```
 
-Results are also written to `data/events.csv` and `data/chain_*.txt`.
+Results are also written to `data/events.csv`, `data/chain_*.txt`, and a
+shareable `data/report.html`.
 
 ## CSV import format
 
@@ -170,18 +185,33 @@ powershell.exe,6200,5124,chrome.exe,ProcessCreate,C:\Windows\System32\powershell
 powershell.exe,6200,5124,chrome.exe,NetworkConnect,198.51.100.10:443,2026-06-16T10:02:11
 ```
 
+## Detections & ATT&CK coverage
+
+| Finding | Technique |
+|---------|-----------|
+| Document/browser app spawned a shell | T1059 Command and Scripting Interpreter |
+| Core Windows process from the wrong folder | T1036.005 Masquerading |
+| Double file extension (`invoice.pdf.exe`) | T1036.007 Double File Extension |
+| Unsigned program in a user-writable folder | T1204.002 User Execution: Malicious File |
+| Dropped executable in a temp folder | T1105 Ingress Tool Transfer |
+| Registry Run-key persistence | T1547.001 Boot or Logon Autostart |
+| Unexpected outbound connection | T1071 Application Layer Protocol |
+| Repeated failed sign-ins | T1110 Brute Force |
+
 ## Stretch goals
 
-- Watch mode that re-scans on an interval and alerts on new suspicious activity
-- IPv6 connections and reverse-DNS / reputation lookups for remote hosts
-- Signed-binary / publisher checks to cut false positives further
+- ~~Watch mode that re-scans on an interval and alerts on new activity~~ ✓ (`anre watch`)
+- ~~IPv6 connections and reverse-DNS lookups for remote hosts~~ ✓
+- ~~Signed-binary / publisher checks to cut false positives~~ ✓
 - SQLite backend and Sigma-rule-driven detections
+- Command-line capture for richer LOLBin detection
 
 ## Interview pitch
 
 Most student security projects stop at port scanners or packet sniffers.
 Ghostwire asks a harder question: **can a program look at a real computer and
 explain, the way an analyst would, whether anything bad is happening?** That
-combines live systems programming (Win32 process + network APIs), graph
-algorithms, security domain knowledge, and product-style engineering focused on
-keeping false positives low enough that a non-expert can actually use it.
+combines live systems programming (Win32 process + network + Authenticode APIs),
+graph algorithms, security domain knowledge, and product-style engineering
+focused on keeping false positives low enough that a non-expert can actually use
+it.

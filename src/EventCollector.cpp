@@ -1,8 +1,11 @@
 #include "anre/EventCollector.hpp"
+#include "anre/SignatureChecker.hpp"
+#include "anre/ThreatScoringEngine.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -11,10 +14,13 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>   // must precede windows.h so we get winsock2, not winsock 1.1
+#include <ws2tcpip.h>   // inet_ntop / getnameinfo for IPv6 + reverse DNS
 #include <windows.h>
 #include <winevt.h>
 #include <tlhelp32.h>   // CreateToolhelp32Snapshot — running process list
 #include <iphlpapi.h>   // GetExtendedTcpTable — connection-to-process mapping
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iphlpapi.lib")
 #endif
 
 namespace {
@@ -30,6 +36,16 @@ std::string trim(const std::string& value) {
     }
     const auto end = value.find_last_not_of(" \t\r\n");
     return value.substr(start, end - start + 1);
+}
+
+// std::stoi throws on non-numeric input; a single malformed row shouldn't take
+// the whole scan down. Fall back to a default instead.
+int safeStoi(const std::string& value, int fallback = 0) {
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return fallback;
+    }
 }
 
 std::vector<std::string> splitCsvLine(const std::string& line) {
@@ -204,8 +220,8 @@ std::vector<SecurityEvent> EventCollector::loadFromFile(const std::string& path)
         events.push_back(makeEvent(
             id++,
             fields[0],
-            std::stoi(fields[1]),
-            std::stoi(fields[2]),
+            safeStoi(fields[1]),
+            safeStoi(fields[2]),
             fields[3],
             fields[4],
             fields[5],
@@ -280,10 +296,8 @@ SecurityEvent parseSysmonXml(std::int64_t id, const std::string& xml) {
         target = image;
     }
 
-    const std::int32_t pid = std::stoi(extractXmlValue(xml, "ProcessId").empty()
-        ? "0" : extractXmlValue(xml, "ProcessId"));
-    const std::int32_t ppid = std::stoi(extractXmlValue(xml, "ParentProcessId").empty()
-        ? "0" : extractXmlValue(xml, "ParentProcessId"));
+    const std::int32_t pid = static_cast<std::int32_t>(safeStoi(extractXmlValue(xml, "ProcessId")));
+    const std::int32_t ppid = static_cast<std::int32_t>(safeStoi(extractXmlValue(xml, "ParentProcessId")));
 
     return makeEvent(
         id,
@@ -373,6 +387,39 @@ bool isPrivateOrLocal(DWORD networkOrderAddr) {
     return false;
 }
 
+std::string formatIpv6(const IN6_ADDR& addr) {
+    char buffer[INET6_ADDRSTRLEN] = {0};
+    if (inet_ntop(AF_INET6, &addr, buffer, sizeof(buffer)) == nullptr) {
+        return {};
+    }
+    return buffer;
+}
+
+bool isPrivateOrLocalV6(const IN6_ADDR& addr) {
+    const auto* b = reinterpret_cast<const unsigned char*>(&addr);
+    bool allZero = true;
+    for (int i = 0; i < 15; ++i) {
+        if (b[i] != 0) { allZero = false; break; }
+    }
+    if (allZero && (b[15] == 0 || b[15] == 1)) return true;  // :: and ::1
+    if (b[0] == 0xff) return true;                            // multicast ff00::/8
+    if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true;   // link-local fe80::/10
+    if ((b[0] & 0xfe) == 0xfc) return true;                   // unique-local fc00::/7
+    return false;
+}
+
+// Best-effort reverse DNS. Because the connections we look at are already
+// established, the name is almost always sitting in the OS resolver cache, so
+// this returns quickly. NI_NAMEREQD means we get an empty string (not the
+// numeric address) when there's no PTR record.
+std::string reverseDns(const sockaddr* addr, socklen_t length) {
+    char host[NI_MAXHOST] = {0};
+    if (getnameinfo(addr, length, host, sizeof(host), nullptr, 0, NI_NAMEREQD) == 0) {
+        return host;
+    }
+    return {};
+}
+
 } // namespace
 #endif
 
@@ -399,17 +446,26 @@ std::vector<SecurityEvent> EventCollector::scanLiveSystem() {
     }
     CloseHandle(snapshot);
 
+    // Processes we couldn't vouch for (unsigned/untrusted, in a user-writable
+    // spot). Used to target the reverse-DNS lookups below at the connections
+    // that actually matter.
+    std::unordered_set<DWORD> suspiciousPids;
+
+    const DWORD selfPid = GetCurrentProcessId();
+
     std::int64_t id = 1;
     for (const PROCESSENTRY32& row : rows) {
         const DWORD pid = row.th32ProcessID;
-        if (pid == 0) {
-            continue; // System Idle Process
+        if (pid == 0 || pid == selfPid) {
+            continue; // System Idle Process, or Ghostwire itself
         }
 
-        std::string path = queryImagePath(pid);
-        if (path.empty()) {
-            path = row.szExeFile;
-        }
+        // The real, full path — empty for protected/system processes we can't
+        // open. We only trust the signature/masquerade checks when we actually
+        // have it, so a process we couldn't read is never falsely accused.
+        const std::string fullPath = queryImagePath(pid);
+        const std::string displayPath = fullPath.empty() ? std::string(row.szExeFile) : fullPath;
+
         std::string timestamp = queryStartTime(pid);
         if (timestamp.empty()) {
             timestamp = "--:--:--";
@@ -419,59 +475,134 @@ std::vector<SecurityEvent> EventCollector::scanLiveSystem() {
         const std::string parentName =
             parentIt == pidToName.end() ? std::string{} : parentIt->second;
 
-        events.push_back(makeEvent(
+        SecurityEvent process = makeEvent(
             id++,
             row.szExeFile,
             static_cast<std::int32_t>(pid),
             static_cast<std::int32_t>(row.th32ParentProcessID),
             parentName,
             "ProcessCreate",
-            path,
-            timestamp));
+            displayPath,
+            timestamp);
+
+        if (!fullPath.empty()) {
+            process.imagePath = fullPath;
+            // Verifying a signature touches the disk and the trust store, so we
+            // only do it where the rules use the answer — binaries running from
+            // user-writable folders. That keeps a whole-system scan to a second
+            // or two instead of a minute.
+            if (ThreatScoringEngine::isFromUserWritableLocation(fullPath)) {
+                const SignatureInfo signature = SignatureChecker::check(fullPath);
+                process.signature = signature.status;
+                process.publisher = signature.publisher;
+                if (signature.status == SignatureStatus::Unsigned ||
+                    signature.status == SignatureStatus::SignedUntrusted) {
+                    suspiciousPids.insert(pid);
+                }
+            }
+        }
+
+        events.push_back(std::move(process));
     }
 
-    // ---- 2) active outbound TCP connections, mapped to their process ----
+    // ---- 2) active outbound connections, mapped to their process ----
+    // Reverse DNS is capped so a machine with many connections can't make the
+    // scan crawl; the names come out of the resolver cache in practice.
+    WSADATA wsaData;
+    const bool winsockReady = WSAStartup(MAKEWORD(2, 2), &wsaData) == 0;
+    int dnsBudget = 8;
+    std::unordered_set<std::string> seen;
+
+    const auto processNameForPid = [&](DWORD owningPid) -> std::string {
+        const auto it = pidToName.find(owningPid);
+        return it == pidToName.end() ? "pid " + std::to_string(owningPid) : it->second;
+    };
+
+    // IPv4
     DWORD tableSize = 0;
     GetExtendedTcpTable(nullptr, &tableSize, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
-
     std::vector<unsigned char> buffer(tableSize);
     if (tableSize > 0 &&
         GetExtendedTcpTable(buffer.data(), &tableSize, FALSE, AF_INET,
                             TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
         const auto* table = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buffer.data());
-        std::unordered_set<std::string> seen;
-
         for (DWORD i = 0; i < table->dwNumEntries; ++i) {
             const MIB_TCPROW_OWNER_PID& conn = table->table[i];
-            if (conn.dwState != MIB_TCP_STATE_ESTAB) {
-                continue; // only live connections
-            }
-            if (isPrivateOrLocal(conn.dwRemoteAddr)) {
-                continue; // ignore loopback and LAN chatter — we care about the internet
+            if (conn.dwState != MIB_TCP_STATE_ESTAB || isPrivateOrLocal(conn.dwRemoteAddr)) {
+                continue;
             }
 
-            const auto nameIt = pidToName.find(conn.dwOwningPid);
-            const std::string name = nameIt == pidToName.end()
-                ? "pid " + std::to_string(conn.dwOwningPid)
-                : nameIt->second;
-            const std::string target = formatIpv4(conn.dwRemoteAddr) + ":" +
+            std::string target = formatIpv4(conn.dwRemoteAddr) + ":" +
                 std::to_string(portFromNetworkOrder(conn.dwRemotePort));
+            const std::string name = processNameForPid(conn.dwOwningPid);
+            if (!seen.insert(name + "->" + target).second) {
+                continue; // collapse repeats to the same host
+            }
 
-            // Collapse repeated connections from the same process to the same host.
+            const bool interesting = suspiciousPids.count(conn.dwOwningPid) != 0 ||
+                ThreatScoringEngine::isSuspiciousProcess(name);
+            if (winsockReady && interesting && dnsBudget > 0) {
+                sockaddr_in sa{};
+                sa.sin_family = AF_INET;
+                sa.sin_addr.s_addr = conn.dwRemoteAddr;
+                const std::string host = reverseDns(reinterpret_cast<sockaddr*>(&sa), sizeof(sa));
+                --dnsBudget;
+                if (!host.empty()) {
+                    target += " (" + host + ")";
+                }
+            }
+
+            events.push_back(makeEvent(id++, name, static_cast<std::int32_t>(conn.dwOwningPid),
+                                       0, std::string{}, "NetworkConnect", target, "--:--:--"));
+        }
+    }
+
+    // IPv6
+    DWORD table6Size = 0;
+    GetExtendedTcpTable(nullptr, &table6Size, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+    std::vector<unsigned char> buffer6(table6Size);
+    if (table6Size > 0 &&
+        GetExtendedTcpTable(buffer6.data(), &table6Size, FALSE, AF_INET6,
+                            TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+        const auto* table = reinterpret_cast<const MIB_TCP6TABLE_OWNER_PID*>(buffer6.data());
+        for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+            const MIB_TCP6ROW_OWNER_PID& conn = table->table[i];
+            if (conn.dwState != MIB_TCP_STATE_ESTAB) {
+                continue;
+            }
+            IN6_ADDR remote;
+            std::memcpy(&remote, conn.ucRemoteAddr, sizeof(remote));
+            if (isPrivateOrLocalV6(remote)) {
+                continue;
+            }
+
+            std::string target = "[" + formatIpv6(remote) + "]:" +
+                std::to_string(portFromNetworkOrder(conn.dwRemotePort));
+            const std::string name = processNameForPid(conn.dwOwningPid);
             if (!seen.insert(name + "->" + target).second) {
                 continue;
             }
 
-            events.push_back(makeEvent(
-                id++,
-                name,
-                static_cast<std::int32_t>(conn.dwOwningPid),
-                0,
-                std::string{},
-                "NetworkConnect",
-                target,
-                "--:--:--"));
+            const bool interesting = suspiciousPids.count(conn.dwOwningPid) != 0 ||
+                ThreatScoringEngine::isSuspiciousProcess(name);
+            if (winsockReady && interesting && dnsBudget > 0) {
+                sockaddr_in6 sa{};
+                sa.sin6_family = AF_INET6;
+                sa.sin6_addr = remote;
+                const std::string host = reverseDns(reinterpret_cast<sockaddr*>(&sa), sizeof(sa));
+                --dnsBudget;
+                if (!host.empty()) {
+                    target += " (" + host + ")";
+                }
+            }
+
+            events.push_back(makeEvent(id++, name, static_cast<std::int32_t>(conn.dwOwningPid),
+                                       0, std::string{}, "NetworkConnect", target, "--:--:--"));
         }
+    }
+
+    if (winsockReady) {
+        WSACleanup();
     }
 
     return events;
