@@ -63,6 +63,7 @@ IncidentPanel::IncidentPanel(QWidget* parent) : QWidget(parent) {
     verdictSub_ = new QLabel;
     verdictSub_->setObjectName("verdictSub");
     verdictSub_->setWordWrap(true);
+    verdictSub_->setTextFormat(Qt::PlainText);
 
     statsRow_ = new QWidget;
     statsRowLayout_ = new QHBoxLayout(statsRow_);
@@ -96,6 +97,7 @@ IncidentPanel::IncidentPanel(QWidget* parent) : QWidget(parent) {
     summaryLabel_ = new QLabel;
     summaryLabel_->setObjectName("summaryBox");
     summaryLabel_->setWordWrap(true);
+    summaryLabel_->setTextFormat(Qt::PlainText);
     summaryLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     summaryLabel_->setContentsMargins(14, 12, 14, 12);
     outer->addWidget(summaryLabel_);
@@ -140,6 +142,7 @@ QWidget* IncidentPanel::makeFindingCard(const anre::Finding& finding) {
     auto* title = new QLabel(qstr(finding.title));
     title->setObjectName("findingTitle");
     title->setWordWrap(true);
+    title->setTextFormat(Qt::PlainText);
 
     top->addWidget(pill, 0, Qt::AlignTop);
     top->addWidget(title, 1);
@@ -156,6 +159,7 @@ QWidget* IncidentPanel::makeFindingCard(const anre::Finding& finding) {
     auto* detail = new QLabel(qstr(finding.detail));
     detail->setObjectName("findingDetail");
     detail->setWordWrap(true);
+    detail->setTextFormat(Qt::PlainText);
     detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(detail);
 

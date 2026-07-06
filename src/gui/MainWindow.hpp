@@ -31,6 +31,9 @@ public:
     // seeing what a real detection looks like without waiting for a scan.
     void openExampleAttack();
 
+    // Import a CSV of events by path (used for `ghostwire <file.csv>`).
+    void openCsv(const QString& path);
+
 private slots:
     void onScanSystem();
     void onScanFinished();

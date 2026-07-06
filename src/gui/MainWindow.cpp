@@ -331,6 +331,7 @@ void MainWindow::displayChain(const anre::AttackChain& chain) {
                 auto* row = new QLabel(QString("•  %1").arg(qstr(line)));
                 row->setObjectName("phaseLine");
                 row->setWordWrap(true);
+                row->setTextFormat(Qt::PlainText);
                 row->setTextInteractionFlags(Qt::TextSelectableByMouse);
                 cardLayout->addWidget(row);
             }
@@ -417,7 +418,10 @@ void MainWindow::onImportCsv() {
     if (path.isEmpty()) {
         return;
     }
+    openCsv(path);
+}
 
+void MainWindow::openCsv(const QString& path) {
     setStatus("Importing CSV…");
     anre::EventCollector collector;
     const auto events = collector.loadFromFile(stdstr(path));

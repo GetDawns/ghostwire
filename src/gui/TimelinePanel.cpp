@@ -81,6 +81,7 @@ void TimelinePanel::setChain(const anre::AttackChain& chain) {
         auto* text = new QLabel(detail);
         text->setObjectName("timelineText");
         text->setWordWrap(true);
+        text->setTextFormat(Qt::PlainText);
         text->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
         layout->addWidget(time);

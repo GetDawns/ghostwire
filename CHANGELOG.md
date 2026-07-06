@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.0.1 — 2026-07-06
+
+Bug fixes and hardening found by a new stress/fuzz suite.
+
+- **Fixed an O(n²) hot path** in `RelationshipEngine::buildGraph` — it did a
+  linear scan of every node to find each parent. Building the process tree for
+  60k processes dropped from ~3.6s to ~50ms. Only noticeable on large Sysmon/CSV
+  imports; a normal live scan was always small.
+- **Hardened the desktop UI against markup in scanned data.** Findings, summary,
+  timeline and narrative labels are now forced to plain text, so a crafted file
+  name or a malicious reverse-DNS record containing HTML (e.g. `<img src=…>`)
+  can't be interpreted as rich text or trigger a resource load. The HTML report
+  already escaped all such values.
+- **Added a stress + fuzz test harness** (`ghostwire_stress`, wired into `ctest`)
+  — 45 checks covering CSV robustness (malformed/huge/adversarial input), report
+  HTML-escaping, graph edge cases (self-parent, cycles, scale), and 3000
+  randomized analyzer iterations asserting score/verdict/sort/dedup invariants.
+- **Added** `ghostwire <file.csv>` to open a CSV on launch; removed dead code.
+
 ## 2.0.0 — 2026-07-06
 
 A major upgrade focused on trustworthiness (fewer false positives, real

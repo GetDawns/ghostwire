@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ghostwire VERSION 2.0.0 LANGUAGES CXX)
+project(ghostwire VERSION 2.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,6 +33,12 @@ endif()
 
 add_executable(anre src/main.cpp)
 target_link_libraries(anre PRIVATE anre_core)
+
+# Stress + fuzz harness (core only, no Qt). Run: ctest, or the exe directly.
+enable_testing()
+add_executable(ghostwire_stress test/stress.cpp)
+target_link_libraries(ghostwire_stress PRIVATE anre_core)
+add_test(NAME stress COMMAND ghostwire_stress)
 
 # Qt is optional. Look for it quietly so that machines without Qt installed
 # can still configure and build the CLI (anre). The GUI target is only added

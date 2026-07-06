@@ -1,20 +1,10 @@
 #include "anre/RelationshipEngine.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <unordered_map>
 
 namespace anre {
-
-std::int64_t RelationshipEngine::findNodeByPid(
-    const std::vector<EventNode>& nodes,
-    std::int32_t pid) {
-    for (const EventNode& node : nodes) {
-        if (node.event.processId == pid) {
-            return node.id;
-        }
-    }
-    return -1;
-}
 
 std::vector<EventNode> RelationshipEngine::buildGraph(
     const std::vector<SecurityEvent>& events) {
@@ -40,23 +30,32 @@ std::vector<EventNode> RelationshipEngine::buildGraph(
         }
     }
 
-    for (EventNode& node : nodes) {
-        if (node.event.parentProcessId <= 0) {
+    // Map node id -> position, so linking a child to its parent is O(1) rather
+    // than a linear scan of every node (which made a big import O(n^2)).
+    std::unordered_map<std::int64_t, std::size_t> nodeIndex;
+    nodeIndex.reserve(nodes.size());
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        nodeIndex.emplace(nodes[i].id, i);
+    }
+
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        const std::int32_t parentPid = nodes[i].event.parentProcessId;
+        if (parentPid <= 0) {
             continue;
         }
 
-        const auto it = pidToNodeId.find(node.event.parentProcessId);
-        if (it == pidToNodeId.end() || it->second == node.id) {
+        const auto pidIt = pidToNodeId.find(parentPid);
+        if (pidIt == pidToNodeId.end() || pidIt->second == nodes[i].id) {
             continue; // unknown parent, or self-reference — skip
         }
 
-        node.parentNodeId = static_cast<std::int32_t>(it->second);
-        for (EventNode& parent : nodes) {
-            if (parent.id == it->second) {
-                parent.children.push_back(node.id);
-                break;
-            }
+        const auto idxIt = nodeIndex.find(pidIt->second);
+        if (idxIt == nodeIndex.end()) {
+            continue;
         }
+
+        nodes[i].parentNodeId = static_cast<std::int32_t>(pidIt->second);
+        nodes[idxIt->second].children.push_back(nodes[i].id);
     }
 
     std::sort(nodes.begin(), nodes.end(), [](const EventNode& a, const EventNode& b) {
