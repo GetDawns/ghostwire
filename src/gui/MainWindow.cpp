@@ -13,9 +13,11 @@
 
 #include <QApplication>
 #include <QDesktopServices>
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFrame>
+#include <QStandardPaths>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
@@ -26,6 +28,22 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent>
+
+namespace {
+
+// A per-user location we can always write to, so saving never depends on the
+// working directory the app happened to be launched with (a read-only CWD was
+// crashing the app when it tried to write its data folder).
+QString writableDataDir() {
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (dir.isEmpty()) {
+        dir = QDir::tempPath() + "/Ghostwire";
+    }
+    QDir().mkpath(dir);
+    return dir;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
@@ -261,7 +279,7 @@ void MainWindow::loadEvents(const std::vector<anre::SecurityEvent>& events, cons
     currentChain_ = builder.build(events, nextChainId_++);
     currentChain_.source = stdstr(sourceLabel);
 
-    anre::EventDatabase database("data");
+    anre::EventDatabase database(stdstr(writableDataDir()));
     database.saveEvents(events);
     database.saveChain(currentChain_);
 
@@ -272,7 +290,7 @@ void MainWindow::loadEvents(const std::vector<anre::SecurityEvent>& events, cons
     exportBtn_->setEnabled(true);
 
     setStatus(QString("Loaded %1 events from %2").arg(events.size()).arg(sourceLabel));
-    statusRight_->setText(QString("Saved to data/  ·  Chain #%1").arg(currentChain_.id));
+    statusRight_->setText(QString("Chain #%1  ·  %2 findings").arg(currentChain_.id).arg(currentChain_.findings.size()));
 }
 
 void MainWindow::displayChain(const anre::AttackChain& chain) {

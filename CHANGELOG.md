@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.3 — 2026-07-06
+
+The real fix for the "pressing Scan closes the app" crash (2.0.2 addressed the
+wrong layer).
+
+- **Root cause:** the app saved its `data/` folder *relative to the working
+  directory* using the throwing `std::filesystem::create_directories`. Launched
+  from a read-only working directory (e.g. a shortcut that starts in
+  `System32`), that threw a `filesystem_error` on the main thread during scan
+  completion, which nothing caught — so `std::terminate` closed the app with no
+  message. Reproduced deterministically with a non-writable working directory.
+- `EventDatabase` is now fully non-throwing (error-code filesystem calls,
+  guarded file writes) — it skips saving instead of crashing.
+- The desktop app writes its data to a per-user location
+  (`%LOCALAPPDATA%\Ghostwire`) instead of the working directory, so saving works
+  no matter how the app was launched.
+- Added an app-wide safety net: any exception that escapes a slot/event handler
+  is caught, logged to `ghostwire-error.log`, and shown to the user — the app
+  can no longer close silently.
+
 ## 2.0.2 — 2026-07-06
 
 Fixes a crash where pressing **Scan This Computer** could close the app with no

@@ -36,10 +36,17 @@ EventDatabase::EventDatabase(std::string path)
     : path_(std::move(path)) {}
 
 void EventDatabase::saveEvents(const std::vector<SecurityEvent>& events) {
-    const std::filesystem::path eventsPath = std::filesystem::path(path_) / "events.csv";
-    std::filesystem::create_directories(path_);
+    // Non-throwing throughout: if the target folder can't be created or written
+    // (e.g. the app was launched with a read-only working directory), we skip
+    // saving rather than let a filesystem_error escape and crash the app.
+    std::error_code ec;
+    std::filesystem::create_directories(path_, ec);
 
+    const std::filesystem::path eventsPath = std::filesystem::path(path_) / "events.csv";
     std::ofstream output(eventsPath);
+    if (!output.is_open()) {
+        return;
+    }
     output << "processName,processId,parentProcessId,parentProcessName,action,target,timestamp,category\n";
     for (const SecurityEvent& event : events) {
         output << csvEscape(event.processName) << ','
@@ -54,10 +61,16 @@ void EventDatabase::saveEvents(const std::vector<SecurityEvent>& events) {
 }
 
 void EventDatabase::saveChain(const AttackChain& chain) {
+    std::error_code ec;
+    std::filesystem::create_directories(path_, ec);
+
     const std::filesystem::path chainPath =
         std::filesystem::path(path_) / ("chain_" + std::to_string(chain.id) + ".txt");
 
     std::ofstream output(chainPath);
+    if (!output.is_open()) {
+        return;
+    }
     output << chain.title << '\n';
     output << "Risk Score: " << chain.riskScore << "/100\n";
     output << "Threat Level: " << chain.threatLevel << "\n\n";
@@ -85,7 +98,8 @@ std::vector<SecurityEvent> EventDatabase::loadEvents() {
 std::vector<AttackChain> EventDatabase::loadChains() {
     std::vector<AttackChain> chains;
     const std::filesystem::path directory(path_);
-    if (!std::filesystem::exists(directory)) {
+    std::error_code ec;
+    if (!std::filesystem::exists(directory, ec)) {
         return chains;
     }
 
