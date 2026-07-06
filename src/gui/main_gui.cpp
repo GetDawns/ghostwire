@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     SafeApplication app(argc, argv);
     QApplication::setApplicationName("Ghostwire");
     QApplication::setOrganizationName("Ghostwire");
-    QApplication::setApplicationVersion("2.0.3");
+    QApplication::setApplicationVersion("2.0.1");
 
     MainWindow window;
     window.show();
