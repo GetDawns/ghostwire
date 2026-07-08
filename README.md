@@ -206,13 +206,6 @@ powershell.exe,6200,5124,chrome.exe,NetworkConnect,198.51.100.10:443,2026-06-16T
 - SQLite backend and Sigma-rule-driven detections
 - Command-line capture for richer LOLBin detection
 
-## Credits
-
-- **[GetDawns](https://github.com/GetDawns)** — author and maintainer
-- **[Claude Code](https://claude.com/claude-code)** (Anthropic's Claude) — AI
-  pair-programming contributor: worked on the v2.x detection engine, the
-  rebuilt Qt UI, crash-proofing, and the stress-test suite
-
 ## Interview pitch
 
 Most student security projects stop at port scanners or packet sniffers.
